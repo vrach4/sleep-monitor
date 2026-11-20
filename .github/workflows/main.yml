@@ -18,22 +18,25 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Accept Android SDK Licenses
+      - name: Setup Android SDK
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          mkdir -p "$HOME/android-sdk/cmdline-tools"
+          curl -fsSL --max-time 60 https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip
+          unzip -q cmdline-tools.zip -d "$HOME/android-sdk/cmdline-tools"
+          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
+          rm cmdline-tools.zip
+          yes | "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$HOME/android-sdk" "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
 
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
 
       - name: Wake up Render server
-        run: curl -fsSL --retry 5 --retry-delay 10 https://sleep-monitor-9m56.onrender.com/manifest.json > /dev/null
+        run: curl -fsSL --max-time 60 --retry 5 --retry-delay 10 https://sleep-monitor-9m56.onrender.com/manifest.json > /dev/null
 
-      - name: Generate signing key
-        run: |
-          keytool -genkeypair -v -keystore android.keystore -alias android \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass sleep123 -keypass sleep123 \
-            -dname "CN=SleepTracker, OU=Dev, O=SleepMonitor, L=Kyiv, S=Kyiv, C=UA"
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: echo "$KEYSTORE_B64" | base64 -d > android.keystore
 
       - name: Create TWA manifest
         run: |
@@ -51,7 +54,7 @@ jobs:
             "navigationDividerColor": "#5C3A26",
             "navigationDividerColorDark": "#000000",
             "backgroundColor": "#1B110C",
-            "enableNotifications": true,
+            "enableNotifications": false,
             "startUrl": "/",
             "iconUrl": "https://sleep-monitor-9m56.onrender.com/icon-512.png",
             "maskableIconUrl": "https://sleep-monitor-9m56.onrender.com/icon-512.png",
@@ -81,19 +84,23 @@ jobs:
           EOF
 
       - name: Configure and Build APK
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           mkdir -p ~/.bubblewrap
           cat << EOF > ~/.bubblewrap/config.json
           {
             "jdkPath": "$JAVA_HOME",
-            "androidSdkPath": "$ANDROID_HOME"
+            "androidSdkPath": "$HOME/android-sdk"
           }
           EOF
           bubblewrap update --skipVersionUpgrade
-          BUBBLEWRAP_KEYSTORE_PASSWORD=sleep123 BUBBLEWRAP_KEY_PASSWORD=sleep123 bubblewrap build --skipPwaValidation
+          bubblewrap build --skipPwaValidation
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: sleep-tracker-apk
-          path: ./*.apk
+          path: ./app-release-signed.apk
+          if-no-files-found: error
