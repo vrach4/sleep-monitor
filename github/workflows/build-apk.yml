@@ -1,0 +1,96 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Bubblewrap CLI
+        run: npm install -g @bubblewrap/cli
+
+      - name: Generate signing key
+        run: |
+          keytool -genkeypair -v -keystore android.keystore -alias android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass sleep123 -keypass sleep123 \
+            -dname "CN=SleepTracker, OU=Dev, O=SleepMonitor, L=Kyiv, S=Kyiv, C=UA"
+
+      - name: Create TWA manifest
+        run: |
+          cat << 'EOF' > twa-manifest.json
+          {
+            "packageId": "com.vrach4.sleepmonitor",
+            "host": "sleep-monitor-9m56.onrender.com",
+            "name": "Sleep Tracker",
+            "launcherName": "Сон",
+            "display": "standalone",
+            "themeColor": "#1B110C",
+            "themeColorDark": "#000000",
+            "navigationColor": "#1B110C",
+            "navigationColorDark": "#000000",
+            "navigationDividerColor": "#5C3A26",
+            "navigationDividerColorDark": "#000000",
+            "backgroundColor": "#1B110C",
+            "enableNotifications": true,
+            "startUrl": "/",
+            "iconUrl": "https://sleep-monitor-9m56.onrender.com/icon-512.png",
+            "maskableIconUrl": "https://sleep-monitor-9m56.onrender.com/icon-512.png",
+            "splashScreenFadeOutDuration": 300,
+            "signingKey": {
+              "path": "./android.keystore",
+              "alias": "android"
+            },
+            "appVersionName": "1.0.0",
+            "appVersionCode": 1,
+            "shortcuts": [],
+            "generatorApp": "bubblewrap-cli",
+            "webManifestUrl": "https://sleep-monitor-9m56.onrender.com/manifest.json",
+            "fallbackType": "customtabs",
+            "features": {},
+            "alphaDependencies": {
+              "enabled": false
+            },
+            "enableSiteSettingsShortcut": true,
+            "isChromeOSOnly": false,
+            "isMetaQuest": false,
+            "fullScopeUrl": "https://sleep-monitor-9m56.onrender.com/",
+            "minSdkVersion": 21,
+            "orientation": "portrait",
+            "fingerprints": []
+          }
+          EOF
+
+      - name: Init & Build APK
+        run: |
+          mkdir -p ~/.bubblewrap
+          cat << 'EOF' > ~/.bubblewrap/config.json
+          {
+            "jdkPath": "${{ env.JAVA_HOME }}",
+            "androidSdkPath": "${{ env.ANDROID_HOME }}"
+          }
+          EOF
+          yes | bubblewrap updateConfig --jdkPath="$JAVA_HOME" --androidSdkPath="$ANDROID_HOME" || true
+          bubblewrap init --manifest="https://sleep-monitor-9m56.onrender.com/manifest.json" --directory=. <<< $'\n' || true
+          BUBBLEWRAP_KEYSTORE_PASSWORD=sleep123 BUBBLEWRAP_KEY_PASSWORD=sleep123 bubblewrap build --skipPwaValidation
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleep-tracker-apk
+          path: ./*.apk
