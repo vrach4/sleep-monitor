@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sleep Tracker v3 — трекер сна в стиле Sleep Monitor (Flask + SQLite, один файл).
+Sleep Tracker v4 — трекер сна в стиле Sleep Monitor (Flask + SQLite, один файл).
 Готов к деплою на Render:  Build: pip install -r requirements.txt   Start: gunicorn app:app
 
 Что внутри:
@@ -23,7 +23,7 @@ from functools import lru_cache
 
 from flask import Flask, Response, abort, jsonify, request
 
-APP_VERSION = "3"
+APP_VERSION = "4"
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 DB_PATH = os.environ.get(
@@ -94,7 +94,8 @@ def _clean_epoch(e):
     if not isinstance(e, dict):
         return None
     out = {k: _int(e.get(k)) for k in EPOCH_KEYS}
-    out["mv"] = None if e.get("mv") is None else _int(e.get("mv"))
+    for k in ("mv", "md", "ma", "mx"):  # необязательные поля: у старых ночей их нет → None, а не 0
+        out[k] = None if e.get(k) is None else _int(e.get(k))
     return out
 
 
@@ -573,6 +574,63 @@ const STAGE = {
 };
 const num = (v, d = 0) => { v = Number(v); return Number.isFinite(v) ? v : d; };
 
+/* ╔════════════════════════════════════════════════════════════════════╗
+   ║  ВСЕ ПОРОГИ И ВЕСА АЛГОРИТМА — ТОЛЬКО ЗДЕСЬ. Тюнить по реальным ночам ║
+   ╚════════════════════════════════════════════════════════════════════╝
+   Активность измеряется в «z-единицах»: 0 = фон ночи, 1 = заметное отклонение от фона. */
+const TUNE = {
+  /* 1. Калибровка под фон — по самой ночи, а не по жёстким константам */
+  BASE_PCT: 0.25,            // перцентиль ночи, считающийся «фоном» (тихая четверть интервалов)
+  SCALE_SPREAD_K: 2.0,       // масштаб = max(мин. масштаб, (медиана − 10-й перцентиль) × K): разброс берётся по тихой части ночи,
+                             // чтобы сами всплески не раздували масштаб; шумная среда (вибрации) → масштаб шире
+  SCALE_MIN_NOISE_DB: 4,     // уровень шума: <4 дБ над фоном — не отклонение
+  SCALE_MIN_SPIKE_DB: 8,     // «пик над своей медианой» (макс − медиана интервала)
+  SCALE_MIN_EVENTS: 3,       // события (пики + резкие звуки) за интервал сверх обычного для ночи
+  SCALE_MIN_MOVE_RAW: 25,    // движение (новые ночи), тысячные м/с²: среднее + MOVE_MAX_W × максимум
+  SCALE_MIN_MOVE_IDX: 25,    // движение (старые ночи, индекс 0–100)
+  MOVE_MAX_W: 0.15,          // вклад максимума движения (разовый поворот) относительно среднего
+  Z_CLIP: 3,                 // ограничение одиночного выброса
+  W_MOTION:   { move: 0.55, noise: 0.25, spike: 0.10, events: 0.10 },   // веса, если есть датчик движения
+  W_NOMOTION: { move: 0,    noise: 0.55, spike: 0.20, events: 0.25 },   // веса без датчика (только звук)
+  NOMOTION_GAIN: 1.4,        // без датчика сумма весов «звука» слабее — усиливаем активность, чтобы пороги были те же
+  SNORE_PCT: 30,             // интервал со храпом ≥30% времени → шум считаем сном
+  SNORE_DAMP: 0.4,           // …и ослабляем вклад шума до 40%
+
+  /* 2. Сглаживание и гистерезис (против «пилы») */
+  SMOOTH_WIN: 3,             // скользящая медиана по интервалам (3 × 5 мин)
+  WAKE_ENTER_Z: 1.0,         // войти в «бодрствование»: активность ≥ 1.0 (заметно выше фона) …
+  WAKE_RUN: 2,               // …подряд ≥ 2 интервалов (≥ 10 мин): одиночный всплеск — не пробуждение
+  SLEEP_Z: 0.7,              // вернуться ко сну: активность < 0.7 (ниже порога входа = гистерезис) …
+  ONSET_RUN: 2,              // …подряд ≥ 2 интервалов (засыпание/повторное засыпание)
+  TAIL_WAKE_RUN: 1,          // утреннее пробуждение в конце записи: достаточно 1 интервала
+  MIN_RUN_EPOCHS: 2,         // минимальная длительность любой внутренней фазы: 2 интервала (10 мин)
+  MIN_DATA_FRAC: 0.3,        // меньше 30% интервалов с данными — фазы не определяем
+  UNRELIABLE_BASE_MOVE_IDX: 75,   // «тихая» четверть ночи показывает движение ≥75 (индекс) — датчик/поверхность ненадёжны
+  UNRELIABLE_BASE_MOVE_RAW: 150,  // то же для новых ночей, тысячные м/с²
+
+  /* 3. Глубокий сон */
+  DEEP_Z: 0.45,              // «тихий» интервал: сглаженная активность ≤ 0.45
+  DEEP_BLIP_Z: 1.0,          // одиночный интервал внутри тихого отрезка прощается, если ≤ 1.0
+  DEEP_MIN_MIN: 15,          // минимальная длительность глубокой фазы, мин
+  DEEP_EPISODE_MAX_MIN: 30,  // один эпизод глубокого сна не длиннее 30 мин (потом цикл)…
+  DEEP_GAP_MIN: 60,          // …и между эпизодами не менее 60 мин (цикл сна ≈ 90 мин)
+  DEEP_AFTER_ONSET_MIN: 20,  // глубокий сон не раньше чем через 20 мин после засыпания/пробуждения
+  DEEP_MAX_FRAC: 0.25,       // глубокого сна не больше 25% времени сна
+  DEEP_LATE_PENALTY: 0.8,    // чем позже в ночи, тем ниже приоритет (глубокий сон — в первой половине)
+
+  /* 4. Оценка ночи 0–100 */
+  W_SCORE: { dur: 0.30, eff: 0.30, deep: 0.12, rest: 0.18, noise: 0.10 },
+  DUR_CURVE:   [[0, 0], [180, 0], [240, 25], [360, 70], [420, 92], [450, 100], [540, 100], [600, 92], [720, 70]],  // время сна, мин → баллы
+  EFF_CURVE:   [[0, 0], [60, 0], [75, 40], [85, 78], [90, 93], [95, 100]],                                        // эффективность, % → баллы
+  DEEP_CURVE:  [[0, 40], [5, 58], [10, 82], [15, 100], [25, 100], [30, 90], [40, 70]],                            // доля глубокого от сна, % → баллы
+  REST_CURVE:  [[0, 100], [0.3, 96], [0.6, 86], [1.0, 66], [1.5, 40], [2.5, 10]],                                 // средняя активность во сне (z) → баллы
+  SNORE_CURVE: [[0, 100], [10, 100], [30, 86], [60, 66], [100, 45]],                                              // индекс храпа 0–100 → баллы
+  PEAK_CURVE:  [[0, 100], [3, 100], [8, 82], [20, 50]],                                                           // пиков шума в час СВЕРХ обычного для ночи → баллы
+  SCORE_SECONDARY_FULL_TST: 240,  // глубокий сон/беспокойство/шум дают баллы пропорционально времени сна (полностью — от 4 ч)
+  REST_TRIM: 0.10,           // при оценке беспокойства отбрасываем 10% самых «громких» интервалов
+  REST_Z_FULL: 2.5           // z, при котором индекс беспокойства = 100 (для отображения)
+};
+
 /* ночи из первой версии (поминутные данные 0..100) → 5-минутные интервалы */
 function legacyToEpochs(mins) {
   const out = [], n = Math.ceil((mins || []).length / EP);
@@ -587,73 +645,219 @@ function legacyToEpochs(mins) {
 }
 const getEpochs = r => r.epochs ? r.epochs : (r.minutes ? legacyToEpochs(r.minutes) : []);
 
-/* «активность» интервала 0..1: движение (60%) + шум (40%); без датчика — только шум */
-function epochScore(e, base) {
-  if (!e) return 0.25;
-  const peakEx = Math.min(1, Math.max(0, (e.m - base - 6) / 20));
-  const evAct = Math.min(1, ((e.pk || 0) + (e.sh || 0)) / 4);
-  let noise = Math.min(1, 0.5 * peakEx + 0.5 * evAct);
-  if ((e.sn || 0) >= 30) noise *= 0.4;          // храп = человек спит, шум не считаем бодрствованием
-  if (e.mv == null) return Math.min(1, noise * 1.2);
-  return 0.6 * (e.mv / 100) + 0.4 * noise;
+/* ---------- вспомогательные функции ---------- */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
+function pctile(arr, p) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b), k = (s.length - 1) * p, f = Math.floor(k), c = Math.ceil(k);
+  return s[f] + (s[c] - s[f]) * (k - f);
+}
+function interp(curve, x) {
+  if (x <= curve[0][0]) return curve[0][1];
+  for (let i = 1; i < curve.length; i++) if (x <= curve[i][0]) {
+    const [x0, y0] = curve[i - 1], [x1, y1] = curve[i];
+    return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+  }
+  return curve[curve.length - 1][1];
+}
+/* отклонение от фона ночи в z-единицах: (x − перцентиль) / max(мин. масштаб, разброс тихой части·K) */
+function zSeries(x, pBase, scaleMin, T) {
+  const v = x.filter(t => t != null);
+  if (!v.length) return x.map(() => null);
+  const base = pctile(v, pBase), spread = pctile(v, 0.5) - pctile(v, 0.1);
+  const scale = Math.max(scaleMin, spread * T.SCALE_SPREAD_K);
+  return x.map(t => t == null ? null : clamp((t - base) / scale, 0, T.Z_CLIP));
+}
+function fillNulls(a) {   // пропущенные интервалы (приложение было заморожено) — линейная интерполяция
+  const out = a.slice(), idx = a.map((v, i) => v == null ? -1 : i).filter(i => i >= 0);
+  if (!idx.length) return a.map(() => 0);
+  for (let i = 0; i < a.length; i++) if (out[i] == null) {
+    const p = idx.filter(j => j < i).pop(), q = idx.find(j => j > i);
+    out[i] = p == null ? a[q] : q == null ? a[p] : a[p] + (a[q] - a[p]) * (i - p) / (q - p);
+  }
+  return out;
+}
+function rollMed(a, w) {   // скользящая медиана; на краях окно дополняется краевым значением
+  const h = w >> 1;
+  return a.map((_, i) => {
+    const s = [];
+    for (let j = i - h; j <= i + h; j++) s.push(a[clamp(j, 0, a.length - 1)]);
+    s.sort((x, y) => x - y);
+    return s[s.length >> 1];
+  });
 }
 
-function analyze(rec) {
-  const E = getEpochs(rec), tib = rec.duration;
-  const n = Math.max(E.length, Math.ceil(tib / EP), 1);
-  const arr = []; for (let i = 0; i < n; i++) arr.push(E[i] || null);
-  const avs = arr.filter(Boolean).map(e => e.a).sort((x, y) => x - y);
-  const base = avs.length ? avs[avs.length >> 1] : 0;
-  const act = arr.map(e => epochScore(e, base));
-  const sm = act.map((v, i) => 0.25 * (i > 0 ? act[i - 1] : v) + 0.5 * v + 0.25 * (i < n - 1 ? act[i + 1] : v));
-  const isWake = sm.map((v, i) => v >= 0.38 || act[i] >= 0.75);
+/* ---------- 1. активность интервалов относительно фона ночи ---------- */
+function activitySeries(E, T) {
+  const ok = E.filter(Boolean);
+  const rawMode = ok.some(e => e.ma != null) && ok.filter(e => e.ma != null).length >= 0.5 * ok.length;
+  const lv = E.map(e => e ? (e.md != null ? e.md : e.a) : null);          // типичный уровень шума: медиана (или среднее у старых ночей)
+  const sp = E.map((e, i) => e ? Math.max(0, e.m - lv[i]) : null);        // «редкие пики» = максимум над типичным уровнем
+  const ev = E.map(e => e ? (e.pk || 0) + (e.sh || 0) : null);            // число звуковых событий
+  const mv = E.map(e => !e ? null : rawMode ? (e.ma == null ? null : e.ma + T.MOVE_MAX_W * (e.mx || 0)) : (e.mv == null ? null : e.mv));
+  const hasMotion = ok.length > 0 && mv.filter(v => v != null).length >= 0.5 * ok.length;
+  const zN = zSeries(lv, T.BASE_PCT, T.SCALE_MIN_NOISE_DB, T);
+  const zS = zSeries(sp, 0.5, T.SCALE_MIN_SPIKE_DB, T);
+  const zE = zSeries(ev, 0.5, T.SCALE_MIN_EVENTS, T);
+  const zM = hasMotion ? zSeries(mv, T.BASE_PCT, rawMode ? T.SCALE_MIN_MOVE_RAW : T.SCALE_MIN_MOVE_IDX, T) : mv.map(() => null);
+  const W = hasMotion ? T.W_MOTION : T.W_NOMOTION, gain = hasMotion ? 1 : T.NOMOTION_GAIN;
+  const A = E.map((e, i) => {
+    if (!e) return null;
+    const damp = (e.sn || 0) >= T.SNORE_PCT ? T.SNORE_DAMP : 1;
+    return gain * (W.move * (zM[i] == null ? 0 : zM[i]) + damp * (W.noise * zN[i] + W.spike * zS[i] + W.events * zE[i]));
+  });
+  const mvv = mv.filter(v => v != null);
+  return { A: fillNulls(A), hasMotion, rawMode, baseMove: mvv.length ? pctile(mvv, T.BASE_PCT) : 0 };
+}
 
-  // засыпание = первый интервал, после которого два подряд без бодрствования
-  let onset = -1;
-  for (let i = 0; i < n; i++) if (!isWake[i] && (i + 1 >= n || !isWake[i + 1])) { onset = i; break; }
-
-  const st = new Array(n).fill('W');
-  if (onset >= 0) {
-    const idx = []; for (let i = onset; i < n; i++) if (!isWake[i]) idx.push(i);
-    idx.forEach(i => st[i] = 'L');
-    // глубокий сон: самые «тихие» интервалы (не больше 28% сна), при равенстве — более ранние
-    const cand = idx.filter(i => sm[i] < 0.10).sort((a, b) => sm[a] - sm[b] || a - b);
-    cand.slice(0, Math.floor(idx.length * 0.28)).forEach(i => st[i] = 'D');
-  }
-
-  let w = 0, l = 0, d = 0;
+/* ---------- 2. бодрствование / сон с гистерезисом и минимальной длительностью ---------- */
+function segmentWake(As, T) {
+  const n = As.length, st = new Array(n).fill('W');
+  let state = 'W', sleepCnt = 0, wakeCnt = 0;
   for (let i = 0; i < n; i++) {
-    const m = Math.max(0, Math.min(EP, tib - EP * i));
-    if (st[i] === 'W') w += m; else if (st[i] === 'L') l += m; else d += m;
+    const a = As[i];
+    if (state === 'W') {
+      if (a < T.SLEEP_Z) {
+        if (++sleepCnt >= T.ONSET_RUN) { for (let k = i - sleepCnt + 1; k <= i; k++) st[k] = 'S'; state = 'S'; sleepCnt = 0; wakeCnt = 0; }
+      } else sleepCnt = 0;
+    } else {
+      st[i] = 'S';
+      if (a >= T.WAKE_ENTER_Z) {
+        if (++wakeCnt >= T.WAKE_RUN) { for (let k = i - wakeCnt + 1; k <= i; k++) st[k] = 'W'; state = 'W'; sleepCnt = 0; wakeCnt = 0; }
+      } else wakeCnt = 0;
+    }
   }
-  const tst = l + d, eff = tib ? Math.round(100 * tst / tib) : 0;
+  if (state === 'S' && wakeCnt >= T.TAIL_WAKE_RUN) for (let k = n - wakeCnt; k < n; k++) st[k] = 'W';   // утреннее пробуждение
+  return st;
+}
+
+/* ---------- 3. лёгкий / глубокий сон ---------- */
+function allocateDeep(seg, As, T) {
+  const n = seg.length, out = seg.map(s => s === 'W' ? 'W' : 'L');
+  const minRun = Math.ceil(T.DEEP_MIN_MIN / EP), epMax = Math.ceil(T.DEEP_EPISODE_MAX_MIN / EP);
+  const gap = Math.ceil(T.DEEP_GAP_MIN / EP), after = Math.ceil(T.DEEP_AFTER_ONSET_MIN / EP);
+  const sleepN = seg.filter(s => s === 'S').length, cap = Math.floor(sleepN * T.DEEP_MAX_FRAC);
+  if (cap < minRun) return out;
+  const boutStart = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) boutStart[i] = seg[i] !== 'S' ? i : (i > 0 && seg[i - 1] === 'S' ? boutStart[i - 1] : i);
+  const q0 = seg.map((s, i) => s === 'S' && As[i] <= T.DEEP_Z), quiet = q0.slice();
+  for (let i = 1; i < n - 1; i++) if (!q0[i] && seg[i] === 'S' && q0[i - 1] && q0[i + 1] && As[i] <= T.DEEP_BLIP_Z) quiet[i] = true;
+  // кандидаты: окна до DEEP_EPISODE_MAX_MIN внутри тихих отрезков, начиная не раньше чем через DEEP_AFTER_ONSET_MIN после засыпания
+  const cands = [];
+  for (let i = 0; i < n;) {
+    if (!quiet[i]) { i++; continue; }
+    let j = i; while (j < n && quiet[j]) j++;                       // тихий отрезок [i, j)
+    for (let pos = Math.max(i, boutStart[i] + after); pos < j; pos++) {
+      const len = Math.min(epMax, j - pos);
+      if (len < minRun) break;
+      cands.push({ s: pos, len, prio: (1 - T.DEEP_LATE_PENALTY * ((pos + len / 2) / n)) * (1 - 0.5 * mean(As.slice(pos, pos + len)) / T.DEEP_Z) });
+    }
+    i = j;
+  }
+  // жадный выбор по приоритету: не более DEEP_MAX_FRAC сна и не ближе DEEP_GAP_MIN друг к другу (цикл ≈ 90 мин)
+  cands.sort((a, b) => b.prio - a.prio || a.s - b.s);
+  const chosen = []; let used = 0;
+  for (const c of cands) {
+    const rem = cap - used;
+    if (rem < minRun) break;
+    const len = Math.min(c.len, rem);
+    if (len < minRun) continue;
+    if (chosen.some(x => c.s < x.s + x.len + gap && x.s < c.s + len + gap)) continue;   // перекрытие / слишком близко
+    chosen.push({ s: c.s, len }); used += len;
+    for (let k = c.s; k < c.s + len; k++) out[k] = 'D';
+  }
+  return out;
+}
+
+/* короткие (< MIN_RUN_EPOCHS) внутренние отрезки сна поглощаются соседней стадией; сон не отдаётся бодрствованию */
+function mergeShortRuns(st, T) {
+  let changed = true, guard = 0;
+  while (changed && guard++ < 20) {
+    changed = false;
+    for (let i = 0; i < st.length;) {
+      let j = i; while (j < st.length && st[j] === st[i]) j++;
+      if (i > 0 && j < st.length && j - i < T.MIN_RUN_EPOCHS && st[i] !== 'W') {
+        const p = st[i - 1], q = st[j];
+        const to = p === q ? p : (p === 'W' ? q : q === 'W' ? p : p);
+        if (to !== st[i]) { for (let k = i; k < j; k++) st[k] = to; changed = true; }
+      }
+      i = j;
+    }
+  }
+}
+
+/* проценты по стадиям: метод наибольших остатков — всегда ровно 100% */
+function pctSplit(mins, total) {
+  const ks = ['W', 'L', 'D'], raw = ks.map(k => 100 * mins[k] / total), fl = raw.map(Math.floor);
+  const order = raw.map((r, i) => [r - fl[i], i]).sort((a, b) => b[0] - a[0]);
+  for (let k = 0, rest = 100 - fl.reduce((a, b) => a + b, 0); k < rest; k++) fl[order[k][1]]++;
+  return { W: fl[0], L: fl[1], D: fl[2] };
+}
+
+/* ---------- главная функция ---------- */
+function analyze(rec, T = TUNE) {
+  const tib = Math.max(1, Math.round(rec.duration));
+  const n = Math.max(1, Math.ceil(tib / EP));
+  const E0 = getEpochs(rec), E = [];
+  for (let i = 0; i < n; i++) E.push(E0[i] || null);
+
+  if (E.filter(Boolean).length < Math.max(1, Math.ceil(T.MIN_DATA_FRAC * n))) {     // данных почти нет — сон не выдумываем
+    return { stages: 'W'.repeat(n), wake: tib, light: 0, deep: 0, tst: 0, eff: 0, pct: { W: 100, L: 0, D: 0 }, onsetMin: tib, waso: 0,
+             awakenings: 0, snore: 0, rest: 0, peaks: 0, seg: [], score: 0, comps: { dur: 0, eff: 0, deep: 0, rest: 0, noise: 0 },
+             hasMotion: false, reliability: 'nodata' };
+  }
+  const { A, hasMotion, rawMode, baseMove } = activitySeries(E, T);
+  const reliability = hasMotion && baseMove >= (rawMode ? T.UNRELIABLE_BASE_MOVE_RAW : T.UNRELIABLE_BASE_MOVE_IDX) ? 'noisy' : 'ok';
+  const As = rollMed(A, T.SMOOTH_WIN);                       // сглаженная активность
+  const st = allocateDeep(segmentWake(As, T), As, T).slice();
+  mergeShortRuns(st, T);
+
+  // длительности: целые минуты, сумма W+L+D == tib строго
+  const mins = { W: 0, L: 0, D: 0 };
+  for (let i = 0; i < n; i++) mins[st[i]] += Math.max(0, Math.min(EP, tib - EP * i));
+  const tst = mins.L + mins.D, pct = pctSplit(mins, tib), eff = pct.L + pct.D;   // эффективность согласована с % бодрствования
+
+  const first = st.indexOf('L') < 0 && st.indexOf('D') < 0 ? -1 : st.findIndex(s => s !== 'W');
+  const onsetMin = first >= 0 ? Math.min(tib, first * EP) : tib;
+  const waso = Math.max(0, mins.W - onsetMin);
+  let awakenings = 0;
+  for (let i = Math.max(first, 0) + 1; i < n; i++) if (st[i] === 'W' && st[i - 1] !== 'W' && i < n - 1) awakenings++;
 
   const sleepIdx = []; for (let i = 0; i < n; i++) if (st[i] !== 'W') sleepIdx.push(i);
-  const snoreAll = sleepIdx.length ? sleepIdx.reduce((s, i) => s + (arr[i] ? arr[i].sn || 0 : 0), 0) / sleepIdx.length : 0;
-  const from = onset >= 0 ? onset : 0;
-  const restAll = (n - from) ? act.slice(from).reduce((s, v) => s + v * 100, 0) / (n - from) : 0;
-  const peaks = arr.reduce((s, e) => s + (e ? e.pk || 0 : 0), 0);
+  const snoreAll = mean(sleepIdx.map(i => E[i] ? E[i].sn || 0 : 0));
+  const from = first >= 0 ? first : 0, tail = As.slice(from);
+  const restMean = mean(tail);                                // средняя активность после засыпания (z)
+  const trimmed = [...tail].sort((a, b) => a - b).slice(0, Math.max(1, Math.ceil(tail.length * (1 - T.REST_TRIM))));
+  const restTrim = mean(trimmed);                             // для оценки: без 10% самых «громких» интервалов
+  const peaks = E.reduce((s, e) => s + (e ? e.pk || 0 : 0), 0);
+  const pks = E.filter(Boolean).map(e => e.pk || 0), pkMed = pctile(pks, 0.5);
+  const hours = Math.max(tib / 60, 0.1);
+  const pkRate = pks.reduce((s, v) => s + Math.max(0, v - pkMed), 0) / hours;   // пики СВЕРХ обычного для этой ночи
 
   // по отрезкам ночи (треть)
   const segN = Math.min(3, n), seg = [];
   for (let s = 0; s < segN; s++) {
     const a = Math.floor(s * n / segN), b = Math.floor((s + 1) * n / segN);
-    let sn = 0, sc = 0, rs = 0;
-    for (let i = a; i < b; i++) { rs += act[i] * 100; if (st[i] !== 'W') { sn += arr[i] ? arr[i].sn || 0 : 0; sc++; } }
+    const sl = []; for (let i = a; i < b; i++) if (st[i] !== 'W') sl.push(E[i] ? E[i].sn || 0 : 0);
     seg.push({ from: rec.start + a * EP * 60000, to: Math.min(rec.end, rec.start + b * EP * 60000),
-               snore: sc ? Math.round(sn / sc) : 0, rest: b > a ? Math.round(rs / (b - a)) : 0 });
+               snore: Math.round(mean(sl)), rest: Math.round(Math.min(100, 100 * mean(As.slice(a, b)) / T.REST_Z_FULL)) });
   }
 
-  const hours = Math.max(tib / 60, 0.1);
-  const durS = Math.min(tst / 480, 1) * 100 - (tst > 600 ? Math.min((tst - 600) / 6, 20) : 0);
-  const effS = Math.max(0, Math.min(1, (eff - 65) / 30)) * 100;
-  const deepS = Math.min((tst ? 100 * d / tst : 0) / 20, 1) * 100;
-  const restS = Math.max(0, 100 - restAll * 1.5);
-  const noiseS = Math.max(0, 100 - Math.min(100, (peaks / hours) * 8 + snoreAll * 0.3));
-  const score = Math.round(Math.max(0, Math.min(100, 0.30 * durS + 0.25 * effS + 0.15 * deepS + 0.20 * restS + 0.10 * noiseS)));
+  // оценка ночи
+  const comps = {
+    dur:   interp(T.DUR_CURVE, tst),
+    eff:   interp(T.EFF_CURVE, eff),
+    deep:  interp(T.DEEP_CURVE, tst ? 100 * mins.D / tst : 0),
+    rest:  interp(T.REST_CURVE, restTrim),
+    noise: 0.8 * interp(T.SNORE_CURVE, snoreAll) + 0.2 * interp(T.PEAK_CURVE, pkRate)
+  };
+  const W = T.W_SCORE;
+  const secF = clamp(tst / T.SCORE_SECONDARY_FULL_TST, 0, 1);
+  const score = Math.round(clamp(W.dur * comps.dur + W.eff * comps.eff + secF * (W.deep * comps.deep + W.rest * comps.rest + W.noise * comps.noise), 0, 100));
 
-  return { stages: st.join(''), wake: Math.round(w), light: Math.round(l), deep: Math.round(d), tst: Math.round(tst), eff,
-           onsetMin: onset >= 0 ? onset * EP : tib, snore: Math.round(snoreAll), rest: Math.round(restAll), peaks, seg, score };
+  return { stages: st.join(''), wake: mins.W, light: mins.L, deep: mins.D, tst, eff, pct, onsetMin, waso, awakenings,
+           snore: Math.round(snoreAll), rest: Math.round(Math.min(100, 100 * restMean / T.REST_Z_FULL)), peaks, seg, score, comps, hasMotion, reliability };
 }
 
 /* проверка и очистка записи (импорт из файла, данные с сервера) */
@@ -674,9 +878,11 @@ function sanitizeRec(r) {
     target: hhmm(ai.target) || o.alarm, targetTs: Math.round(num(ai.targetTs)), windowMin: Math.round(num(ai.windowMin)),
     firedAt: ai.firedAt ? Math.round(num(ai.firedAt)) : null,
     reason: ai.reason === 'smart' ? 'smart' : ai.reason === 'target' ? 'target' : null, early: Math.round(num(ai.early)) };
+  const opt = v => v == null ? null : num(v);   // необязательные поля новых ночей: md, ma, mx
   if (Array.isArray(r.epochs) && r.epochs.length <= 600) {
     o.epochs = r.epochs.map(e => (e && typeof e === 'object') ? {
-      a: num(e.a), m: num(e.m), mv: e.mv == null ? null : num(e.mv), lo: num(e.lo), hi: num(e.hi), sn: num(e.sn), sh: num(e.sh), pk: num(e.pk) } : null);
+      a: num(e.a), m: num(e.m), mv: opt(e.mv), lo: num(e.lo), hi: num(e.hi), sn: num(e.sn), sh: num(e.sh), pk: num(e.pk),
+      md: opt(e.md), ma: opt(e.ma), mx: opt(e.mx) } : null);
   } else if (Array.isArray(r.minutes) && r.minutes.length <= 3000) {
     o.minutes = r.minutes.map(m => (m && typeof m === 'object') ? { a: num(m.a), m: num(m.m), p: num(m.p) } : null);
   }
@@ -936,9 +1142,12 @@ function closeBucket() {
   const c = S && S.cur; if (!c || !c.n) { if (S) S.cur = null; return; }
   let mv = null;
   if (c.mvN > 0) mv = Math.round(100 * (0.4 * Math.min(c.mvS / c.mvN / 0.01, 1) + 0.6 * Math.min(c.mvX / 0.12, 1)));
+  let md = null;                                         // медиана уровня шума за интервал
+  if (c.h) { let acc = 0; for (let k = 0; k <= 90; k++) { acc += c.h[k]; if (acc >= c.n / 2) { md = k; break; } } }
   S.epochs[c.idx] = { a: Math.round(c.sa / c.n), m: Math.round(c.mx), mv,
     lo: Math.round(100 * c.slo / c.n), hi: Math.round(100 * c.shi / c.n),
-    sn: Math.round(100 * c.sn / c.n), sh: c.sh, pk: c.pk };
+    sn: Math.round(100 * c.sn / c.n), sh: c.sh, pk: c.pk,
+    md, ma: c.mvN > 0 ? Math.round(1000 * c.mvS / c.mvN) : null, mx: c.mvN > 0 ? Math.round(1000 * c.mvX) : null };   // движение в тысячных м/с²
   S.cur = null;
 }
 
@@ -975,9 +1184,10 @@ function tick() {
   let c = S.cur;
   if (!c || c.idx !== idx) {
     closeBucket(); saveState();
-    c = S.cur = { idx, n: 0, sa: 0, mx: 0, slo: 0, shi: 0, sn: 0, sh: 0, pk: 0, mvS: 0, mvN: 0, mvX: 0 };
+    c = S.cur = { idx, n: 0, sa: 0, mx: 0, slo: 0, shi: 0, sn: 0, sh: 0, pk: 0, mvS: 0, mvN: 0, mvX: 0, h: new Array(91).fill(0) };
   }
-  c.n++; c.sa += level; if (level > c.mx) c.mx = level; c.slo += loR; c.shi += hiR;
+  if (!c.h) c.h = new Array(91).fill(0);                // гистограмма уровней → медиана интервала (устойчива к редким пикам)
+  c.n++; c.sa += level; if (level > c.mx) c.mx = level; c.slo += loR; c.shi += hiR; c.h[Math.round(level)]++;
   if (isSnore) c.sn++; if (isSharp) c.sh++;
   if (isPeak) { c.pk++; S.peaks++; }
   if (mvT !== null) { c.mvS += mvT; c.mvN++; if (mvT > c.mvX) c.mvX = mvT; }
@@ -1110,9 +1320,8 @@ function showReport(r) {
   box.textContent = '⏰ ' + txt; box.classList.toggle('hidden', !txt);
 
   // фазы
-  const tib = Math.max(r.duration, 1);
   $('#r-stages').innerHTML = [['W', an.wake], ['L', an.light], ['D', an.deep]].map(([k, m]) => {
-    const p = Math.round(100 * m / tib);
+    const p = an.pct[k];
     return '<div class="srow"><span>' + STAGE[k].n + '</span><div class="bar"><i style="width:' + p + '%;background:' + STAGE[k].c + '"></i></div><b>' + fmtDur(m) + ' · ' + p + '%</b></div>';
   }).join('');
 
@@ -1122,7 +1331,9 @@ function showReport(r) {
       '<div class="srow"><span>Храп</span><div class="bar"><i style="width:' + Math.min(100, g.snore) + '%;background:var(--sage)"></i></div><b>' + g.snore + '</b></div>' +
       '<div class="srow"><span>Беспокойство</span><div class="bar"><i style="width:' + Math.min(100, g.rest) + '%;background:var(--tan)"></i></div><b>' + g.rest + '</b></div></div>').join('');
 
-  $('#r-note').textContent = (r.v === 2 && !r.motion ? 'Датчик движения недоступен или не разрешён: фазы определены только по шуму, точность ниже. ' : '') +
+  $('#r-note').textContent = (an.reliability === 'nodata' ? 'Данных слишком мало, чтобы определить фазы сна. ' : '') +
+    (an.reliability === 'noisy' ? 'Датчик движения всю ночь показывал сильные вибрации (неустойчивая поверхность?): фазы могут быть неточными. ' : '') +
+    (r.v === 2 && !r.motion ? 'Датчик движения недоступен или не разрешён: фазы определены только по шуму, точность ниже. ' : '') +
     'Фазы сна — оценка по шуму и движению телефона, а не медицинское измерение. Уровень шума в условных дБ (не калиброван).';
 
   drawHypno($('#c-hyp'), an.stages, r.start, r.duration);
