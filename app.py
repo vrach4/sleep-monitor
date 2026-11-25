@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sleep Tracker v4 — трекер сна в стиле Sleep Monitor (Flask + SQLite, один файл).
+Sleep Tracker v4.1 — трекер сна в стиле Sleep Monitor (Flask + SQLite, один файл).
 Готов к деплою на Render:  Build: pip install -r requirements.txt   Start: gunicorn app:app
 
 Что внутри:
@@ -23,7 +23,8 @@ from functools import lru_cache
 
 from flask import Flask, Response, abort, jsonify, request
 
-APP_VERSION = "4"
+APP_VERSION = "4.1"
+APP_DATE = "23.11.2026"
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 DB_PATH = os.environ.get(
@@ -314,7 +315,8 @@ def icon_png(size):
 
 @app.get("/")
 def index():
-    return Response(HTML, mimetype="text/html")
+    html = HTML.replace("__APP_VERSION__", APP_VERSION).replace("__APP_DATE__", APP_DATE)
+    return Response(html, mimetype="text/html")
 
 
 # ───────────────────────────── Интерфейс ─────────────────────────────
@@ -338,6 +340,7 @@ html,body{margin:0;background:var(--bg);color:var(--cream);font-family:-apple-sy
 body{padding:calc(env(safe-area-inset-top) + 8px) 16px calc(92px + env(safe-area-inset-bottom));min-height:100vh;touch-action:manipulation}
 body.inNight{padding:0;overflow:hidden}
 .hidden{display:none!important}
+.about{margin:22px 4px 6px;font-size:12px;line-height:1.55;color:var(--dim);text-align:center;opacity:.85}
 .center{text-align:center}
 .dim{color:var(--dim)}
 .sm{font-size:13px}
@@ -453,6 +456,7 @@ canvas.tall{height:230px}
       </div>
       <div class="dim sm" id="scr-note" style="margin-top:8px"></div>
     </div>
+    <div class="about">Sleep Tracker · версия __APP_VERSION__ (__APP_DATE__)<br>Программа полностью создана искусственным интеллектом (Claude, Anthropic)</div>
   </div>
 
   <!-- ночной режим -->
@@ -532,6 +536,7 @@ canvas.tall{height:230px}
     <button class="alt" id="btn-import">Импорт данных (JSON)</button>
   </div>
   <input type="file" id="file" accept="application/json,.json" class="hidden">
+  <div class="about">Sleep Tracker · версия __APP_VERSION__ (__APP_DATE__)<br>Программа полностью создана искусственным интеллектом (Claude, Anthropic)</div>
 </div>
 
 <div class="tabs" id="tabs">
