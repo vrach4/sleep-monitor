@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Sleep Tracker v4.1 — трекер сна в стиле Sleep Monitor (Flask + SQLite, один файл).
+Sleep Tracker v0.2.3 — трекер сна в стиле Sleep Monitor (Flask + SQLite, один файл).
 Готов к деплою на Render:  Build: pip install -r requirements.txt   Start: gunicorn app:app
 
 Что внутри:
-  • тёмный интерфейс в палитре Chocolate Brown / Soft Sage / Warm Cream
-  • чек-лист перед сном, ночной режим для OLED и LCD, умный будильник
-  • 5-минутные интервалы: шум (усл. дБ), движение (DeviceMotion), частотный профиль
-  • гипнограмма, эффективность сна, оценка ночи, индекс храпа и беспокойства
-  • localStorage на телефоне = главная копия; SQLite на сервере = зеркало
-  • экспорт / импорт JSON, PWA (manifest + service worker + PNG-иконки без доп. библиотек)
+- тёмный интерфейс в палитре Chocolate Brown / Soft Sage / Warm Cream
+- чек-лист перед сном, ночной режим для OLED и LCD, умный будильник
+- 5-минутные интервалы: шум (усл. дБ), движение (DeviceMotion), частотный профиль
+- гипнограмма, эффективность сна, оценка ночи, индекс храпа и беспокойства
+- localStorage на телефоне = главная копия; SQLite на сервере = зеркало
+- экспорт / импорт JSON, PWA (manifest + service worker + PNG-иконки без доп. библиотек)
 """
 import json
 import math
@@ -23,8 +23,8 @@ from functools import lru_cache
 
 from flask import Flask, Response, abort, jsonify, request
 
-APP_VERSION = "4.1"
-APP_DATE = "23.11.2026"
+APP_VERSION = "0.2.3"
+APP_DATE = "26.11.2026"
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 DB_PATH = os.environ.get(
@@ -184,6 +184,11 @@ def healthz():
     return "ok"
 
 
+@app.get("/api/version")
+def api_version():
+    return jsonify({"version": APP_VERSION, "date": APP_DATE})
+
+
 # ───────────────────────────── PWA: manifest, service worker, иконки ─────────────────────────────
 @app.get("/manifest.json")
 def manifest():
@@ -325,6 +330,7 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#1B110C">
+<meta name="application-version" content="__APP_VERSION__">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -414,6 +420,37 @@ canvas.tall{height:230px}
 #night.ringing .n-clock{opacity:.9!important;color:var(--cream)!important}
 #night.ringing .n-sub{opacity:1!important;color:var(--sage)!important}
 #night.ringing #btn-wake{opacity:1!important;background:var(--sage)!important;color:var(--bg)!important;border:0!important}
+
+/* настройки будильника */
+.opt{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;font-size:15px}
+.opt small{display:block;color:var(--dim);font-size:12px;margin-top:2px;line-height:1.35}
+.sw{position:relative;flex:none;width:50px;height:30px}
+.sw input{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0;z-index:1}
+.sw i{position:absolute;inset:0;background:var(--card2);border-radius:15px;transition:background .2s}
+.sw i::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:var(--cream);transition:transform .2s}
+.sw input:checked+i{background:var(--sage)}
+.sw input:checked+i::after{transform:translateX(20px);background:var(--bg)}
+.stepper{display:flex;align-items:center;gap:6px;flex:none}
+.stepper button{width:44px;padding:8px;font-size:22px;border-radius:12px}
+.stepper input{width:56px;text-align:center;background:var(--card2);color:var(--cream);border:0;border-radius:12px;font-size:20px;padding:8px 4px;font-family:inherit}
+#alarm-opts.off,#win-row.off{opacity:.4;pointer-events:none}
+/* ночь: стоп и удержание */
+#btn-stop{display:none}
+#night.ringing #btn-stop{display:block;opacity:1!important}
+#btn-wake{position:relative;overflow:hidden;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none}
+#btn-wake::after{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--p,0)*1%);background:rgba(241,231,211,.38);pointer-events:none}
+/* кнопки 🔍, удаление */
+.zbtn,.delbtn{width:auto;padding:6px 12px;font-size:14px;border-radius:12px;background:var(--card2);color:var(--cream);font-weight:500}
+.delbtn{margin-left:8px;font-size:15px;padding:6px 10px}
+/* подробный вид */
+.zoom{position:fixed;inset:0;z-index:300;background:var(--bg);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+.zbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.zctl{display:flex;align-items:center;gap:6px}
+.zctl button{width:auto;min-width:40px;padding:8px 10px;font-size:17px;border-radius:12px;background:var(--card2);color:var(--cream)}
+#z-pct{min-width:48px;text-align:center;font-size:13px;color:var(--dim)}
+#z-scroll{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+#z-box{background:var(--card);border-radius:18px;overflow:hidden;width:max-content}
+#z-box canvas{display:block}
 </style></head>
 <body>
 
@@ -437,10 +474,25 @@ canvas.tall{height:230px}
         <div><div>Будильник</div><div class="dim sm" id="alarm-left"></div></div>
         <input type="time" id="alarm" value="07:00">
       </div>
-      <div class="dim sm" style="margin-top:12px">Умный будильник — окно пробуждения (будит в лёгкой фазе)</div>
-      <div class="seg" id="win-seg">
-        <button data-w="0">Выкл (обычный)</button><button data-w="15">15 мин</button>
-        <button data-w="20">20 мин</button><button data-w="30">30 мин</button>
+      <div class="opt"><div>Будильник включён</div><label class="sw"><input type="checkbox" id="al-on"><i></i></label></div>
+      <div id="alarm-opts">
+        <div class="opt"><div>Умный (в лёгкой фазе)<small>может разбудить раньше цели, в пределах окна</small></div>
+          <label class="sw"><input type="checkbox" id="al-smart"><i></i></label></div>
+        <div class="opt"><div>Срабатывать после целевого времени<small>повтор каждые 5 мин в пределах окна после цели, пока не нажато «Я проснулся». Выкл — после цели будильник не звонит</small></div>
+          <label class="sw"><input type="checkbox" id="al-after"><i></i></label></div>
+        <div class="opt" id="win-row"><div>Окно, мин<small>от 10 до 25 мин</small></div>
+          <div class="stepper"><button class="alt" id="win-minus">−</button>
+            <input type="number" id="win-val" min="10" max="25" step="1" inputmode="numeric">
+            <button class="alt" id="win-plus">+</button></div></div>
+        <div style="margin-top:14px">Звук</div>
+        <div class="seg" id="snd-seg">
+          <button data-snd="melody">Мелодия</button><button data-snd="bell">Звонок</button>
+          <button data-snd="beep">Сигнал</button><button data-snd="chord">Аккорд</button>
+        </div>
+        <div class="opt"><span>Громкость</span><b id="vol-val"></b></div>
+        <input type="range" id="vol" min="5" max="100" step="5" style="width:100%;accent-color:#A3B18A">
+        <button class="alt" id="snd-test" style="margin-top:12px;font-size:15px;padding:12px">▶ Проверить звук</button>
+        <div class="dim sm" style="margin-top:6px">Ползунок меняет громкость внутри приложения; общую громкость телефона задают кнопки.</div>
       </div>
     </div>
 
@@ -456,7 +508,7 @@ canvas.tall{height:230px}
       </div>
       <div class="dim sm" id="scr-note" style="margin-top:8px"></div>
     </div>
-    <div class="about">Sleep Tracker · версия __APP_VERSION__ (__APP_DATE__)<br>Программа полностью создана искусственным интеллектом (Claude, Anthropic)</div>
+    <div class="about">Sleep Tracker · версия __APP_VERSION__ (__APP_DATE__)<br>Программа полностью создана искусственным интеллектом: Claude (Anthropic) и Google Gemini</div>
   </div>
 
   <!-- ночной режим -->
@@ -476,7 +528,8 @@ canvas.tall{height:230px}
       <div class="n-sub" id="n-sub"></div>
     </div>
     <div class="btns">
-      <button id="btn-wake">☀️ Я проснулся</button>
+      <button id="btn-stop" class="alt">🔕 Остановить будильник</button>
+      <button id="btn-wake">☀️ Я проснулся<span style="display:block;font-size:12px;font-weight:400;opacity:.8">удерживайте 3 секунды</span></button>
       <button class="link" id="btn-cancel">Отменить запись</button>
     </div>
   </div>
@@ -484,26 +537,26 @@ canvas.tall{height:230px}
   <!-- утренний отчёт -->
   <div id="report" class="hidden">
     <h2 id="r-title">Утренний отчёт</h2>
-    <div class="dim sm" id="r-range"></div>
+    <div class="row"><div class="dim sm" id="r-range"></div><button class="zbtn" data-zoom="rstats">🔍 Крупно</button></div>
     <div class="card center">
       <div class="dim sm">Оценка ночи</div>
       <div class="big" id="r-score">0</div>
       <div id="r-text" class="dim"></div>
     </div>
     <div class="card hidden" id="r-alarm"></div>
-    <div class="grid2">
+    <div class="grid2" id="r-grid">
       <div class="stat"><span>В постели</span><b id="r-tib"></b></div>
       <div class="stat"><span>Время сна</span><b id="r-tst"></b></div>
       <div class="stat"><span>Эффективность сна</span><b id="r-eff"></b></div>
       <div class="stat"><span>Засыпание</span><b id="r-onset"></b></div>
     </div>
     <div class="card">
-      <h3>Фазы сна</h3>
+      <div class="row"><h3>Фазы сна</h3><button class="zbtn" data-zoom="hyp">🔍</button></div>
       <div id="r-stages"></div>
       <canvas id="c-hyp"></canvas>
     </div>
     <div class="card">
-      <h3>Шум и движения</h3>
+      <div class="row"><h3>Шум и движения</h3><button class="zbtn" data-zoom="noise">🔍</button></div>
       <canvas id="c-noise" class="tall"></canvas>
       <div class="legend dim sm">
         <span><i class="dot" style="background:rgba(241,231,211,.4)"></i>макс. шум</span>
@@ -513,7 +566,7 @@ canvas.tall{height:230px}
       </div>
     </div>
     <div class="card">
-      <h3>Храп и беспокойство по отрезкам ночи</h3>
+      <div class="row"><h3>Храп и беспокойство по отрезкам ночи</h3><button class="zbtn" data-zoom="rseg">🔍</button></div>
       <div id="r-seg"></div>
     </div>
     <div class="dim sm" id="r-note" style="line-height:1.45;margin:4px 4px 0"></div>
@@ -527,7 +580,7 @@ canvas.tall{height:230px}
 
 <!-- ========== ИСТОРИЯ ========== -->
 <div id="view-history" class="hidden">
-  <h2>История</h2>
+  <div class="row"><h2>История</h2><button class="zbtn" data-zoom="hstats">🔍 Крупно</button></div>
   <div class="syncline"></div>
   <div class="grid2" id="h-stats"></div>
   <div id="h-list"></div>
@@ -536,12 +589,22 @@ canvas.tall{height:230px}
     <button class="alt" id="btn-import">Импорт данных (JSON)</button>
   </div>
   <input type="file" id="file" accept="application/json,.json" class="hidden">
-  <div class="about">Sleep Tracker · версия __APP_VERSION__ (__APP_DATE__)<br>Программа полностью создана искусственным интеллектом (Claude, Anthropic)</div>
+  <div class="about">Sleep Tracker · версия __APP_VERSION__ (__APP_DATE__)<br>Программа полностью создана искусственным интеллектом: Claude (Anthropic) и Google Gemini</div>
 </div>
 
 <div class="tabs" id="tabs">
   <button class="on" data-v="sleep">🌙 Сон</button>
   <button data-v="history">📊 История</button>
+</div>
+
+<!-- чек-лист перед сном -->
+<div id="zoom" class="zoom hidden">
+  <div class="zbar">
+    <b id="z-title"></b>
+    <div class="zctl"><button id="z-out">−</button><span id="z-pct">100%</span><button id="z-in">+</button>
+      <button id="z-reset">Сброс</button><button id="z-close">✕</button></div>
+  </div>
+  <div id="z-scroll"><div id="z-box"></div></div>
 </div>
 
 <!-- чек-лист перед сном -->
@@ -932,13 +995,14 @@ async function api(url, opt = {}, ms = 30000) {
 const setSync = t => document.querySelectorAll('.syncline').forEach(e => e.textContent = t);
 const lite = n => { const { epochs, minutes, ...rest } = n; return rest; };
 
-let serverList = [], serverLoaded = false, syncing = false, retryTimer = null, curView = 'sleep';
+let serverList = [], serverLoaded = false, syncing = false, syncAgain = false, retryTimer = null, curView = 'sleep';
 const RETRY = [3, 5, 10, 15, 20, 30, 30, 60, 60, 60];
 
 /* Сверка: сервер → список; чего нет на сервере — досылаем; удалённое — удаляем;
    чего нет на телефоне — подтягиваем (так localStorage становится полной резервной копией). */
 async function syncAll(attempt = 0) {
-  if (syncing || S) return;
+  if (S) return;
+  if (syncing) { syncAgain = true; return; }
   clearTimeout(retryTimer);
   syncing = true; setSync('⏳ Синхронизация с сервером…');
   try {
@@ -957,12 +1021,13 @@ async function syncAll(attempt = 0) {
     }
     for (const s of serverList) {                     // резервная копия на телефон
       if (S) break;
-      if (localIds.has(s.id) || dels.includes(s.id)) continue;
+      if (localIds.has(s.id) || dels.includes(s.id) || getDeleted().includes(s.id)) continue;
       try { const full = sanitizeRec(await api('/api/night/' + s.id)); if (full) { addNight(full); localIds.add(full.id); } }
       catch (e) { break; }
     }
     serverLoaded = true; syncing = false;
     setSync('☁️ Всё сохранено на сервере');
+    if (syncAgain) { syncAgain = false; setTimeout(() => syncAll(), 0); }
   } catch (e) {
     syncing = false;
     if (attempt < RETRY.length) {
@@ -970,24 +1035,75 @@ async function syncAll(attempt = 0) {
       setSync('⏳ Сервер просыпается, повторю через ' + d + ' с…');
       retryTimer = setTimeout(() => syncAll(attempt + 1), d * 1000);
     } else setSync('⚠️ Нет связи с сервером. Ночи хранятся в телефоне, отправлю позже.');
+    if (syncAgain) { syncAgain = false; setTimeout(() => syncAll(), 0); }
   }
   if (curView === 'history') renderHistory();
 }
 window.addEventListener('online', () => syncAll());
 
 /* ================= настройки ================= */
-const AUTO_OLED = (window.devicePixelRatio || 1) >= 3;   // iPhone 13 Pro = 3x (OLED), iPhone 11 = 2x (LCD)
+const AUTO_OLED = (window.devicePixelRatio || 1) >= 3;
 function screenType() { const v = localStorage.getItem('screenType'); return (v === 'oled' || v === 'lcd') ? v : (AUTO_OLED ? 'oled' : 'lcd'); }
-function winMin() { const v = Number(localStorage.getItem('winMin')); return [0, 15, 20, 30].includes(v) ? v : 0; }
+const clampWin = v => { v = Math.round(Number(v)); if (!Number.isFinite(v)) v = 15; return Math.max(10, Math.min(25, v)); };
+const lsBool = (k, d) => { const v = localStorage.getItem(k); return v === null ? d : v === '1'; };
+const alarmOn = () => lsBool('alarmOn', true);
+const afterOn = () => lsBool('afterOn', false);
+function smartOn() { const v = localStorage.getItem('smartOn'); return v !== null ? v === '1' : Number(localStorage.getItem('winMin')) > 0; }
+function winMin() { const v = localStorage.getItem('winMin'); return clampWin(v === null || Number(v) === 0 ? 15 : v); }
+function soundId() { const v = localStorage.getItem('sound'); return SOUNDS[v] ? v : 'melody'; }
+function volume() { const r = localStorage.getItem('vol'), v = r === null ? 90 : Number(r); return Number.isFinite(v) ? Math.max(5, Math.min(100, v)) : 90; }
+
+/* звуки (Web Audio, без файлов) */
+function tone(c, out, type, f, t, dur, peak) {
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = type; o.frequency.value = f;
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + 0.03); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
+}
+const SOUNDS = {
+  melody: { n: 'Мелодия', period: 2600, play(c, out, t0) { [523.25, 659.25, 783.99, 1046.5, 783.99, 659.25].forEach((f, i) => tone(c, out, 'triangle', f, t0 + i * 0.4, 0.38, 0.5)); } },
+  bell:   { n: 'Звонок',  period: 3200, play(c, out, t0) { [1046.5, 1318.5, 1568, 2093].forEach((f, i) => { tone(c, out, 'sine', f, t0 + i * 0.35, 1.4, 0.3); tone(c, out, 'sine', f * 2.76, t0 + i * 0.35, 0.5, 0.1); }); } },
+  beep:   { n: 'Сигнал',  period: 1600, play(c, out, t0) { for (let i = 0; i < 4; i++) tone(c, out, 'square', 1000, t0 + i * 0.25, 0.15, 0.2); } },
+  chord:  { n: 'Аккорд',  period: 3600, play(c, out, t0) { [261.63, 329.63, 392, 523.25].forEach(f => tone(c, out, 'triangle', f, t0, 3.2, 0.22)); } }
+};
+
+/* предпрослушивание: один цикл выбранного звука на выбранной громкости */
+let pv = null;
+function stopPreview() { if (!pv) return; clearTimeout(pv.k); try { pv.ctx.close(); } catch (e) {} pv = null; const b = $('#snd-test'); if (b) b.textContent = '▶ Проверить звук'; }
+function togglePreview() {
+  if (pv) { stopPreview(); return; }
+  if (S) return;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.resume) ctx.resume();
+  const out = ctx.createGain(); out.gain.value = volume() / 100; out.connect(ctx.destination);
+  const snd = SOUNDS[soundId()];
+  snd.play(ctx, out, ctx.currentTime + 0.05);
+  pv = { ctx, out, k: setTimeout(stopPreview, snd.period + 500) };
+  $('#snd-test').textContent = '■ Стоп';
+}
+
 function renderSettings() {
   const t = screenType();
   $('#scr-oled').classList.toggle('on', t === 'oled'); $('#scr-lcd').classList.toggle('on', t === 'lcd');
   $('#scr-note').textContent = localStorage.getItem('screenType') ? '' : 'Определено автоматически';
-  document.querySelectorAll('#win-seg button').forEach(b => b.classList.toggle('on', Number(b.dataset.w) === winMin()));
+  $('#al-on').checked = alarmOn(); $('#al-smart').checked = smartOn(); $('#al-after').checked = afterOn();
+  $('#win-val').value = winMin();
+  $('#alarm-opts').classList.toggle('off', !alarmOn());
+  $('#win-row').classList.toggle('off', !smartOn() && !afterOn());
+  document.querySelectorAll('#snd-seg button').forEach(b => b.classList.toggle('on', b.dataset.snd === soundId()));
+  $('#vol').value = volume(); $('#vol-val').textContent = volume() + '%';
   updateAlarmLeft();
 }
 document.querySelectorAll('#scr-seg button').forEach(b => b.onclick = () => { localStorage.setItem('screenType', b.dataset.s); renderSettings(); });
-document.querySelectorAll('#win-seg button').forEach(b => b.onclick = () => { localStorage.setItem('winMin', b.dataset.w); renderSettings(); });
+[['#al-on', 'alarmOn'], ['#al-smart', 'smartOn'], ['#al-after', 'afterOn']].forEach(([id, key]) =>
+  $(id).addEventListener('change', e => { localStorage.setItem(key, e.target.checked ? '1' : '0'); renderSettings(); }));
+const setWin = v => { localStorage.setItem('winMin', String(clampWin(v))); renderSettings(); };
+$('#win-minus').onclick = () => setWin(winMin() - 1);
+$('#win-plus').onclick = () => setWin(winMin() + 1);
+$('#win-val').addEventListener('change', e => setWin(e.target.value));
+document.querySelectorAll('#snd-seg button').forEach(b => b.onclick = () => { localStorage.setItem('sound', b.dataset.snd); renderSettings(); stopPreview(); togglePreview(); });
+$('#vol').addEventListener('input', e => { localStorage.setItem('vol', e.target.value); $('#vol-val').textContent = e.target.value + '%'; if (pv) pv.out.gain.value = Number(e.target.value) / 100; });
+$('#vol').addEventListener('change', () => { if (!pv) togglePreview(); });
+$('#snd-test').onclick = togglePreview;
 
 /* ================= часы ================= */
 function nextAlarmTs(str) {
@@ -997,8 +1113,10 @@ function nextAlarmTs(str) {
   return d.getTime();
 }
 function updateAlarmLeft() {
+  if (!alarmOn()) { $('#alarm-left').textContent = 'выключен'; return; }
   const ts = nextAlarmTs($('#alarm').value), left = Math.round((ts - Date.now()) / 60000), w = winMin();
-  $('#alarm-left').textContent = 'через ' + Math.floor(left / 60) + ' ч ' + (left % 60) + ' мин' + (w ? ' · окно с ' + fmtT(ts - w * 60000) : '');
+  $('#alarm-left').textContent = 'через ' + Math.floor(left / 60) + ' ч ' + (left % 60) + ' мин' +
+    (smartOn() ? ' · окно с ' + fmtT(ts - w * 60000) : '') + (afterOn() ? ' · повтор до ' + fmtT(ts + w * 60000) : '');
 }
 function updateClock() {
   if (S) return;   // ночью экран не перерисовываем
@@ -1084,6 +1202,7 @@ function releaseAwake() {
 
 /* ВАЖНО: AudioContext создаётся синхронно внутри нажатия кнопки (требование iOS Safari) */
 async function beginSleep(saved) {
+  stopPreview();
   actx = new (window.AudioContext || window.webkitAudioContext)();
   if (actx.resume) actx.resume();
 
@@ -1106,11 +1225,16 @@ async function beginSleep(saved) {
   const hz = actx.sampleRate / analyser.fftSize;
   B = { l0: Math.max(1, Math.round(50 / hz)), l1: Math.round(500 / hz), h0: Math.round(2000 / hz), h1: Math.min(fbuf.length - 1, Math.round(8000 / hz)) };
 
-  if (saved) { S = saved; S.cur = S.cur || null; }
-  else {
+  if (saved) {
+    S = saved; S.cur = S.cur || null;
+    if (S.alarmOn === undefined) S.alarmOn = true;
+    if (S.afterOn === undefined) S.afterOn = false;
+    if (S.smart === undefined) S.smart = (S.windowMin || 0) > 0;
+    S.winMin = clampWin(S.winMin !== undefined ? S.winMin : (S.windowMin || 15));
+  } else {
     const a = $('#alarm').value;
-    S = { start: Date.now(), alarmStr: a, alarmTs: nextAlarmTs(a), windowMin: winMin(), epochs: [], cur: null, peaks: 0,
-          motion: motionOk, screen: screenType(), ringAt: null, ringReason: null };
+    S = { start: Date.now(), alarmStr: a, alarmTs: nextAlarmTs(a), alarmOn: alarmOn(), afterOn: afterOn(), smart: smartOn(), winMin: winMin(),
+          stoppedAt: null, epochs: [], cur: null, peaks: 0, motion: motionOk, screen: screenType(), ringAt: null, ringReason: null };
   }
   if (motionOk) { mot.ema = null; mot.max = 0; mot.n = 0; window.addEventListener('devicemotion', onMotion); }
   else S.motion = false;
@@ -1118,7 +1242,9 @@ async function beginSleep(saved) {
   base = null; evs = []; tickN = 0; lastMin = -1; ringing = false; dimmed = false;
   const nt = $('#night'); nt.className = ''; nt.style.cssText = '';
   $('#n-warn').textContent = '';
-  $('#n-sub').textContent = 'Будильник ' + S.alarmStr + (S.windowMin ? ' · окно ' + S.windowMin + ' мин' : '');
+  $('#n-sub').textContent = S.alarmOn
+    ? 'Будильник ' + S.alarmStr + (S.smart ? ' · окно ' + S.winMin + ' мин' : '') + (S.afterOn ? ' · повтор до +' + S.winMin + ' мин' : '')
+    : 'Будильник выключен';
   $('#n-peaks').textContent = S.peaks;
   $('#n-clock').textContent = fmtT(Date.now());
   pane('night');
@@ -1201,9 +1327,12 @@ function tick() {
   // умный будильник: серия событий (шум/движение) за 3 минуты = поверхностная фаза сна
   if ((isPeak || isSharp || isMove) && now - (evs[evs.length - 1] || 0) > 5000) evs.push(now);
   while (evs.length && now - evs[0] > 180000) evs.shift();
-  if (!ringing) {
-    if (now >= S.alarmTs) startRing('target');                       // гарантированно в целевое время
-    else if (S.windowMin > 0 && now >= S.alarmTs - S.windowMin * 60000 && now - S.start > 20 * 60000 && evs.length >= 3) startRing('smart');
+  if (S.alarmOn && !ringing) {
+    const lim = S.alarmTs + (S.afterOn ? S.winMin * 60000 : 0) + 60000;
+    if (!S.stoppedAt) {
+      if (now >= S.alarmTs) { if (now <= lim) startRing('target'); }
+      else if (S.smart && now >= S.alarmTs - S.winMin * 60000 && now - S.start > 20 * 60000 && evs.length >= 3) startRing('smart');
+    } else if (S.afterOn && now >= S.alarmTs && now >= S.stoppedAt + 5 * 60000 && now <= lim) startRing('repeat');
   }
 
   // экран: до перехода в ночной режим — живые цифры; после — только часы раз в минуту
@@ -1218,34 +1347,31 @@ function tick() {
   if (mn !== lastMin) { lastMin = mn; $('#n-clock').textContent = fmtT(now); if (dimmed && mn % 3 === 0) shiftClock(); }
 }
 
-/* мелодия с плавно нарастающей громкостью */
-const NOTES = [523.25, 659.25, 783.99, 1046.5, 783.99, 659.25];
-function playBar() {
-  const t0 = actx.currentTime + 0.05;
-  NOTES.forEach((f, i) => {
-    const o = actx.createOscillator(), g = actx.createGain(), t = t0 + i * 0.4;
-    o.type = 'triangle'; o.frequency.value = f;
-    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.5, t + 0.04); g.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
-    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.4);
-  });
-}
 function startRing(reason) {
-  ringing = true;
+  ringing = true; S.stoppedAt = null;
   if (!S.ringAt) { S.ringAt = Date.now(); S.ringReason = reason; }
   saveState();
   $('#night').classList.add('ringing');
-  $('#n-sub').textContent = 'Пора вставать — нажмите «Я проснулся»';
+  $('#n-sub').textContent = 'Пора вставать — удерживайте «Я проснулся» 3 с';
   master = actx.createGain();
-  const t = actx.currentTime;
-  master.gain.setValueAtTime(0.02, t); master.gain.linearRampToValueAtTime(0.9, t + 45);
+  const t = actx.currentTime, v = volume() / 100;
+  master.gain.setValueAtTime(0.02, t); master.gain.linearRampToValueAtTime(v, t + (reason === 'repeat' ? 15 : 45));
   master.connect(actx.destination);
-  playBar(); melTimer = setInterval(playBar, 2600);
+  const snd = SOUNDS[soundId()], play = () => snd.play(actx, master, actx.currentTime + 0.05);
+  play(); melTimer = setInterval(play, snd.period);
   if (navigator.vibrate) navigator.vibrate([400, 200, 400]);
 }
 function stopRing() {
   if (!ringing) return;
   clearInterval(melTimer); try { master.disconnect(); } catch (e) {}
   ringing = false;
+}
+function dismissRing() {
+  if (!ringing) return;
+  stopRing();
+  S.stoppedAt = Date.now(); saveState();
+  $('#night').classList.remove('ringing');
+  $('#n-sub').textContent = S.afterOn && Date.now() < S.alarmTs + S.winMin * 60000 ? 'Будильник остановлен · повтор через 5 мин, если не нажать «Я проснулся»' : 'Будильник остановлен';
 }
 
 function stopCapture() {
@@ -1268,11 +1394,9 @@ async function finish() {
   const nEp = Math.ceil(duration / EP), epochs = [];
   for (let i = 0; i < nEp; i++) epochs.push(S.epochs[i] || null);
   const fired = S.ringAt || null;
-  const rec = {
-    v: 2, id: S.start, start: S.start, end, alarm: S.alarmStr, duration, epochs, motion: !!S.motion,
-    alarmInfo: { target: S.alarmStr, targetTs: S.alarmTs, windowMin: S.windowMin, firedAt: fired, reason: fired ? S.ringReason : null,
-                 early: fired ? Math.max(0, Math.round((S.alarmTs - fired) / 60000)) : 0 }
-  };
+  const rec = { v: 2, id: S.start, start: S.start, end, alarm: S.alarmOn ? S.alarmStr : '', duration, epochs, motion: !!S.motion };
+  if (S.alarmOn) rec.alarmInfo = { target: S.alarmStr, targetTs: S.alarmTs, windowMin: S.smart ? S.winMin : 0, firedAt: fired,
+    reason: fired ? S.ringReason : null, early: fired ? Math.max(0, Math.round((S.alarmTs - fired) / 60000)) : 0 };
   const an = analyze(rec);
   Object.assign(rec, { quality: an.score, eff: an.eff, tst: an.tst, wake: an.wake, light: an.light, deep: an.deep,
                        snore: an.snore, rest: an.rest, peaks: an.peaks, stages: an.stages });
@@ -1287,7 +1411,28 @@ async function finish() {
 $('#btn-start').onclick = () => $('#modal').classList.remove('hidden');
 $('#btn-no').onclick = () => $('#modal').classList.add('hidden');
 $('#btn-ok').onclick = () => { $('#modal').classList.add('hidden'); beginSleep(null); };   // сон стартует только после подтверждения
-$('#btn-wake').onclick = finish;
+$('#btn-stop').onclick = dismissRing;
+(function () {
+  const HOLD_MS = 3000, b = $('#btn-wake');
+  let t0 = 0, raf = 0, active = false;
+  const setP = p => b.style.setProperty('--p', p);
+  function frame() {
+    if (!active) return;
+    const p = Math.min(1, (performance.now() - t0) / HOLD_MS);
+    setP(p * 100);
+    if (p >= 1) { active = false; setP(0); if (navigator.vibrate) navigator.vibrate(60); finish(); return; }
+    raf = requestAnimationFrame(frame);
+  }
+  b.addEventListener('pointerdown', e => {
+    if (active || (e.button != null && e.button > 0)) return;
+    active = true; t0 = performance.now();
+    try { b.setPointerCapture(e.pointerId); } catch (_) {}
+    raf = requestAnimationFrame(frame);
+  });
+  const cancel = () => { if (!active) return; active = false; cancelAnimationFrame(raf); setP(0); };
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, cancel));
+  b.addEventListener('contextmenu', e => e.preventDefault());
+})();
 $('#btn-cancel').onclick = () => {
   if (!confirm('Отменить запись без сохранения?')) return;
   stopCapture(); S = null; LS.del('sleepState'); pane('idle');
@@ -1306,6 +1451,7 @@ function showReport(r) {
   curReportId = r.id;
   showView('sleep'); pane('report');
   const an = analyze(r);
+  REP = { r, an };
   $('#r-title').textContent = 'Ночь на ' + fmtDate(r.end);
   $('#r-range').textContent = fmtT(r.start) + ' → ' + fmtT(r.end);
   $('#r-score').textContent = an.score; $('#r-score').style.color = scoreColor(an.score);
@@ -1345,13 +1491,17 @@ function showReport(r) {
   drawNoise($('#c-noise'), getEpochs(r), r.start, !(r.v === 2 && !r.motion));
 }
 $('#btn-close-report').onclick = () => pane('idle');
-$('#btn-del').onclick = () => {
-  if (!confirm('Удалить эту ночь из истории?')) return;
-  const id = curReportId;
+function deleteNight(id) {
+  if (!confirm('Удалить эту ночь? Действие нельзя отменить.')) return false;
   LS.set('nights', getNights().filter(n => n.id !== id));
   const d = getDeleted(); if (!d.includes(id)) { d.push(id); LS.set('deleted', d); }
   serverList = serverList.filter(s => s.id !== id);
-  pane('idle'); showView('history');   // showView запустит синхронизацию: удаление уйдёт на сервер
+  for (const k of [...AM.keys()]) if (k.startsWith(id + ':')) AM.delete(k);
+  return true;
+}
+$('#btn-del').onclick = () => {
+  if (!deleteNight(curReportId)) return;
+  closeZoom(); pane('idle'); showView('history');
 };
 
 /* ================= графики (рисуются только утром) ================= */
@@ -1363,7 +1513,8 @@ function setupCanvas(cv) {
   return { g, w, h };
 }
 function timeLabels(g, n, x, startTs, w, h) {
-  const total = n * EP, step = total > 360 ? 120 : total > 150 ? 60 : 30;
+  const total = n * EP, ppm = (x(n) - x(0)) / total;
+  const step = [10, 15, 30, 60, 120].find(s => s * ppm >= 44) || 120;
   g.fillStyle = 'rgba(241,231,211,.62)';
   for (let t = 0; t <= total; t += step) g.fillText(fmtT(startTs + t * 60000), Math.min(x(t / EP) - 14, w - 32), h - 5);
 }
@@ -1448,9 +1599,14 @@ function renderHistory() {
     return '<div class="item" data-id="' + s.id + '"><div class="row"><div><b>' + fmtDate(s.end) + '</b>' +
       '<div class="dim sm">' + fmtT(s.start) + ' → ' + fmtT(s.end) + ' · сон ' + fmtDur(u.tst) + (u.eff != null ? ' · эфф. ' + u.eff + '%' : '') +
       (serverLoaded && !onSrv.has(s.id) ? ' · ⏳' : '') + '</div></div>' +
-      '<span class="badge" style="color:' + scoreColor(u.score) + '">' + u.score + '</span></div>' + stripHtml(u.stages) + '</div>';
+      '<div style="display:flex;align-items:center"><span class="badge" style="color:' + scoreColor(u.score) + '">' + u.score + '</span>' +
+      '<button class="delbtn" data-del="' + s.id + '" aria-label="Удалить">🗑</button></div></div>' + stripHtml(u.stages) + '</div>';
   }).join('') : '<p class="dim center">Пока нет записанных ночей</p>';
   document.querySelectorAll('.item').forEach(el => el.onclick = () => openNight(Number(el.dataset.id)));
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    if (deleteNight(Number(b.dataset.del))) { renderHistory(); syncAll(); }
+  });
 }
 async function openNight(id) {
   let n = merged().find(x => x.id === id);
@@ -1466,7 +1622,7 @@ async function openNight(id) {
 $('#btn-export').onclick = () => {
   const nights = getNights();
   if (!nights.length) { alert('Пока нечего экспортировать.'); return; }
-  const text = JSON.stringify({ app: 'sleep-tracker', version: 2, exported: new Date().toISOString(), nights });
+  const text = JSON.stringify({ app: 'sleep-tracker', version: 2, appVersion: '__APP_VERSION__', exported: new Date().toISOString(), nights });
   const name = 'sleep-backup-' + new Date().toISOString().slice(0, 10) + '.json';
   const file = new File([text], name, { type: 'application/json' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) { navigator.share({ files: [file], title: name }).catch(() => {}); return; }
@@ -1497,6 +1653,81 @@ $('#file').onchange = async e => {
   alert('Импорт завершён. Новых ночей: ' + added + (bad ? ', пропущено повреждённых: ' + bad : '') + '.');
   renderHistory(); syncAll();
 };
+
+/* ================= подробный вид с масштабом ================= */
+let REP = null, Z = null;
+const ZP = 12;   // отступ области прокрутки
+const ZOOMS = {
+  hyp:    { t: 'Фазы сна',            h: 260, draw: cv => drawHypno(cv, REP.an.stages, REP.r.start, REP.r.duration) },
+  noise:  { t: 'Шум и движения',      h: 340, draw: cv => drawNoise(cv, getEpochs(REP.r), REP.r.start, !(REP.r.v === 2 && !REP.r.motion)) },
+  rstats: { t: 'Итоги ночи',          html: () => $('#r-grid') },
+  rseg:   { t: 'Храп и беспокойство', html: () => $('#r-seg') },
+  hstats: { t: 'Статистика',          html: () => $('#h-stats') }
+};
+function openZoom(id) {
+  const d = ZOOMS[id]; if (!d || (id !== 'hstats' && !REP)) return;
+  const sc = $('#z-scroll'), box = $('#z-box');
+  box.innerHTML = ''; box.style.cssText = '';
+  $('#zoom').classList.remove('hidden'); $('#z-title').textContent = d.t;
+  const baseW = Math.max(200, sc.clientWidth - 2 * ZP);
+  Z = { id, d, z: 1, baseW, vw: window.innerWidth };
+  if (d.draw) {                                  // графики: масштабируется ось времени, перерисовка без потери резкости
+    const cv = document.createElement('canvas'); box.appendChild(cv);
+    const dpr = window.devicePixelRatio || 1;
+    Z.cv = cv; Z.baseH = d.h; Z.maxZ = Math.floor(Math.min(8, 14e6 / (baseW * d.h * dpr * dpr)) * 100) / 100;   // лимит размера canvas в iOS
+  } else {                                       // цифры и блоки: масштабируется целиком
+    const src = d.html();
+    if (!src || !src.innerHTML.trim()) { closeZoom(); return; }
+    const inner = src.cloneNode(true);
+    inner.removeAttribute('id'); inner.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+    inner.style.width = baseW + 'px'; box.appendChild(inner);
+    Z.inner = inner; Z.natW = baseW; Z.natH = inner.offsetHeight; Z.maxZ = 3;
+  }
+  sc.scrollLeft = sc.scrollTop = 0;
+  renderZoom();
+}
+function renderZoom() {
+  const z = Z.z, box = $('#z-box');
+  if (Z.cv) { Z.cv.style.width = Math.round(Z.baseW * z) + 'px'; Z.cv.style.height = Z.baseH + 'px'; Z.d.draw(Z.cv); }
+  else { box.style.width = Math.round(Z.natW * z) + 'px'; box.style.height = Math.round(Z.natH * z) + 'px';
+         Z.inner.style.transform = 'scale(' + z + ')'; Z.inner.style.transformOrigin = '0 0'; }
+  $('#z-pct').textContent = Math.round(z * 100) + '%';
+}
+function setZoom(z, cx, cy) {
+  if (!Z) return;
+  const sc = $('#z-scroll'), old = Z.z;
+  z = Math.max(1, Math.min(Z.maxZ, Math.round(z * 100) / 100));
+  if (z === old) return;
+  if (cx == null) { cx = sc.clientWidth / 2; cy = sc.clientHeight / 2; }
+  const ux = (sc.scrollLeft + cx - ZP) / old, uy = (sc.scrollTop + cy - ZP) / old;   // точка под центром жеста остаётся на месте
+  Z.z = z; renderZoom();
+  sc.scrollLeft = ux * z + ZP - cx;
+  if (!Z.cv) sc.scrollTop = uy * z + ZP - cy;
+}
+function closeZoom() { $('#zoom').classList.add('hidden'); $('#z-box').innerHTML = ''; Z = null; }
+$('#z-in').onclick = () => Z && setZoom(Z.z * 1.25);
+$('#z-out').onclick = () => Z && setZoom(Z.z / 1.25);
+$('#z-reset').onclick = () => { if (!Z) return; setZoom(1); const sc = $('#z-scroll'); sc.scrollLeft = sc.scrollTop = 0; };
+$('#z-close').onclick = closeZoom;
+document.addEventListener('click', e => { const b = e.target.closest('[data-zoom]'); if (b) openZoom(b.dataset.zoom); });
+window.addEventListener('resize', () => { if (Z && Math.abs(window.innerWidth - Z.vw) > 40) openZoom(Z.id); });
+(function () {                                   // pinch-to-zoom (2 пальца), панорамирование — обычной прокруткой одним пальцем
+  const sc = $('#z-scroll'); let pd = 0, pz = 1;
+  const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  sc.addEventListener('touchstart', e => { if (e.touches.length === 2 && Z) { pd = dist(e.touches); pz = Z.z; } }, { passive: true });
+  sc.addEventListener('touchmove', e => {
+    if (e.touches.length !== 2 || !Z || !pd) return;
+    e.preventDefault();
+    const r = sc.getBoundingClientRect(), t = e.touches;
+    setZoom(pz * dist(t) / pd, (t[0].clientX + t[1].clientX) / 2 - r.left, (t[0].clientY + t[1].clientY) / 2 - r.top);
+  }, { passive: false });
+  sc.addEventListener('touchend', e => { if (e.touches.length < 2) pd = 0; }, { passive: true });
+  sc.addEventListener('wheel', e => {            // Ctrl+колесо на компьютере
+    if (!e.ctrlKey || !Z) return; e.preventDefault();
+    const r = sc.getBoundingClientRect();
+    setZoom(Z.z * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+})();
 
 /* ================= старт ================= */
 setInterval(updateClock, 1000); updateClock(); renderSettings();
